@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { requireRole, logAction } from '@/lib/auth';
 
-export async function GET(request: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
   const { admin, error } = await requireRole(request, [
     'REGISTRATION_ADMIN',
     'FINANCE_ADMIN',
@@ -14,7 +15,7 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
   if (error) return error;
 
   const participant = await prisma.participant.findUnique({
-    where: { id: params.id },
+    where: { id: id },
     include: { class: true, house: true, payments: true, attendance: true },
   });
   if (!participant) return NextResponse.json({ error: 'Not found.' }, { status: 404 });
@@ -26,11 +27,12 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
   return NextResponse.json({ participant });
 }
 
-export async function PATCH(request: NextRequest, { params }: { params: { id: string } }) {
+export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
   const { admin, error } = await requireRole(request, ['REGISTRATION_ADMIN']);
   if (error) return error;
 
-  const existing = await prisma.participant.findUnique({ where: { id: params.id } });
+  const existing = await prisma.participant.findUnique({ where: { id: id } });
   if (!existing) return NextResponse.json({ error: 'Not found.' }, { status: 404 });
   if (admin.role !== 'SUPER_ADMIN' && admin.zone && existing.zone !== admin.zone) {
     return NextResponse.json({ error: 'Forbidden — outside your assigned zone.' }, { status: 403 });
@@ -41,29 +43,30 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
   const data: Record<string, unknown> = {};
   for (const key of allowed) if (body[key] !== undefined) data[key] = body[key];
 
-  const updated = await prisma.participant.update({ where: { id: params.id }, data });
+  const updated = await prisma.participant.update({ where: { id: id }, data });
   await logAction({ actorId: admin.id, action: 'UPDATE_PARTICIPANT', targetType: 'Participant', targetId: updated.id, before: existing, after: updated });
 
   return NextResponse.json({ success: true, participant: updated });
 }
 
-export async function DELETE(request: NextRequest, { params }: { params: { id: string } }) {
+export async function DELETE(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
   const { admin, error } = await requireRole(request, []);
   if (error) return error;
   if (admin.role !== 'SUPER_ADMIN') {
     return NextResponse.json({ error: 'Forbidden — Super Admin only (this permanently deletes the record).' }, { status: 403 });
   }
 
-  const existing = await prisma.participant.findUnique({ where: { id: params.id } });
+  const existing = await prisma.participant.findUnique({ where: { id: id } });
   if (!existing) return NextResponse.json({ error: 'Not found.' }, { status: 404 });
 
   await prisma.$transaction([
-    prisma.payment.deleteMany({ where: { participantId: params.id } }),
-    prisma.attendance.deleteMany({ where: { participantId: params.id } }),
-    prisma.participant.delete({ where: { id: params.id } }),
+    prisma.payment.deleteMany({ where: { participantId: id } }),
+    prisma.attendance.deleteMany({ where: { participantId: id } }),
+    prisma.participant.delete({ where: { id: id } }),
   ]);
 
-  await logAction({ actorId: admin.id, action: 'DELETE_PARTICIPANT', targetType: 'Participant', targetId: params.id, before: existing });
+  await logAction({ actorId: admin.id, action: 'DELETE_PARTICIPANT', targetType: 'Participant', targetId: id, before: existing });
 
   return NextResponse.json({ success: true });
 }
