@@ -1,0 +1,207 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Programme {
+  id                   String   @id @default(uuid())
+  name                 String
+  year                 Int
+  campStart            DateTime
+  campEnd              DateTime
+  venueName            String
+  venueAddress         String?
+  earlyBirdFee         Int
+  flatFee              Int
+  earlyBirdDeadline    DateTime
+  defaultHouseCapacity Int      @default(40)
+  registrationOpen     Boolean  @default(true)
+
+  classes      Class[]
+  houses       House[]
+  participants Participant[]
+}
+
+model Class {
+  id                 String   @id @default(uuid())
+  programmeId        String
+  name               String
+  eligibleCategories String[]
+
+  programme    Programme     @relation(fields: [programmeId], references: [id])
+  participants Participant[]
+}
+
+model House {
+  id          String      @id @default(uuid())
+  programmeId String
+  name        String
+  gender      Gender
+  capacity    Int         @default(40)
+  status      HouseStatus @default(ACTIVE)
+
+  programme    Programme     @relation(fields: [programmeId], references: [id])
+  participants Participant[]
+}
+
+model Participant {
+  id               String           @id @default(uuid())
+  registrationId   String           @unique
+  programmeId      String
+  surname          String
+  otherName        String
+  gender           Gender
+  ageGroup         String
+  email            String
+  phone            String
+  category         String
+  zone             String
+  healthChallenges String?
+  isMinor          Boolean          @default(false)
+  guardianName     String?
+  guardianContact  String?
+  classId          String?
+  houseId          String?
+  attendanceStatus AttendanceStatus @default(NOT_ARRIVED)
+  paymentStatus    PaymentStatus    @default(NOT_PAID)
+  createdAt        DateTime         @default(now())
+
+  programme  Programme   @relation(fields: [programmeId], references: [id])
+  class      Class?      @relation(fields: [classId], references: [id])
+  house      House?      @relation(fields: [houseId], references: [id])
+  payments   Payment[]
+  attendance Attendance?
+}
+
+model Payment {
+  id                String      @id @default(uuid())
+  participantId     String
+  transactionId     String      @unique
+  amount            Int
+  paymentType       PaymentType
+  installmentNumber Int?
+  planRate          PlanRate
+  provider          String
+  status            TxStatus    @default(PENDING)
+  paidAt            DateTime?
+  verifiedAt        DateTime?
+
+  // Bank-transfer details shown to the payer, and the provider's own
+  // transaction reference once the credit notification arrives.
+  virtualAccountNumber String?
+  providerReference    String?
+
+  participant Participant  @relation(fields: [participantId], references: [id])
+  events      PaymentEvent[]
+
+  @@unique([participantId, installmentNumber])
+  @@index([virtualAccountNumber])
+}
+
+// One row per webhook delivery. providerReference is UNIQUE, which is what
+// makes retries safe (same delivery twice = second one is ignored), and
+// the raw payload is kept so unmatched transfers can be reconciled by hand.
+model PaymentEvent {
+  id                String   @id @default(uuid())
+  providerReference String   @unique
+  paymentId         String?
+  amount            Int
+  outcome           String   // MATCHED | UNMATCHED | UNDERPAID | DUPLICATE_PAYMENT
+  raw               Json
+  createdAt         DateTime @default(now())
+
+  payment Payment? @relation(fields: [paymentId], references: [id])
+}
+
+model Attendance {
+  id               String           @id @default(uuid())
+  participantId    String           @unique
+  status           AttendanceStatus @default(NOT_ARRIVED)
+  checkInTime      DateTime?
+  checkedInBy      String?
+  corrected        Boolean          @default(false)
+  correctionReason String?
+
+  participant Participant @relation(fields: [participantId], references: [id])
+}
+
+model AdminUser {
+  id           String    @id @default(uuid())
+  name         String
+  email        String    @unique
+  passwordHash String
+  role         AdminRole
+  zone         String?
+  isProtected  Boolean   @default(false)
+  status       AdminStatus @default(ACTIVE)
+  createdAt    DateTime  @default(now())
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  actorId    String
+  action     String
+  targetType String
+  targetId   String
+  before     Json?
+  after      Json?
+  timestamp  DateTime @default(now())
+}
+
+enum Gender {
+  MALE
+  FEMALE
+}
+
+enum HouseStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum PaymentType {
+  FULL
+  INSTALLMENT
+}
+
+enum PlanRate {
+  EARLY_BIRD
+  FLAT
+}
+
+enum TxStatus {
+  PENDING
+  VERIFIED
+  FAILED
+  REFUNDED
+}
+
+enum PaymentStatus {
+  NOT_PAID
+  PARTIALLY_PAID
+  FULLY_PAID
+  REFUNDED
+}
+
+enum AttendanceStatus {
+  NOT_ARRIVED
+  PRESENT
+}
+
+enum AdminRole {
+  SUPER_ADMIN
+  REGISTRATION_ADMIN
+  FINANCE_ADMIN
+  ATTENDANCE_ADMIN
+  HOUSE_ADMIN
+  VIEWER
+  ZONE_ADMIN
+}
+
+enum AdminStatus {
+  ACTIVE
+  DEACTIVATED
+}
