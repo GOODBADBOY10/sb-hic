@@ -156,7 +156,7 @@ export default function AdminPaymentsPage() {
           ) : visible.length === 0 ? (
             <p className="p-6 text-sm text-[#4B5347]">No transactions match this filter.</p>
           ) : (
-            <table className="w-full min-w-[800px] text-left text-sm">
+            <table className="w-full min-w-200 text-left text-sm">
               <thead>
                 <tr className="border-b border-[#0F3D2E]/10 text-xs font-bold uppercase tracking-wide text-[#4A5D23]">
                   <th className="px-4 py-3">Reference</th>

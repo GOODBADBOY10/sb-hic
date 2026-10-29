@@ -152,7 +152,7 @@ export default function RegisterForm() {
   return (
     <div className="grid w-full grid-cols-1 overflow-hidden rounded-3xl border border-[#0F3D2E]/10 bg-[#EBF4F0] text-left shadow-xl lg:grid-cols-12">
       {/* Sidebar */}
-      <div className="flex flex-col justify-between bg-gradient-to-b from-[#0F3D2E] to-[#051e13] p-8 text-white lg:col-span-5">
+      <div className="flex flex-col justify-between bg-linear-to-b from-[#0F3D2E] to-[#051e13] p-8 text-white lg:col-span-5">
         <div>
           <span className="rounded-xl border border-emerald-500/10 bg-[#145237] px-3.5 py-1 text-[10px] font-black uppercase tracking-wider text-[#E8B923]">
             Registration Details
@@ -166,7 +166,7 @@ export default function RegisterForm() {
 
           <div className="flex flex-col gap-4">
             <div className="flex items-start gap-3 rounded-2xl border border-white/10 bg-white/5 p-4">
-              <Calendar className="mt-0.5 h-5 w-5 flex-shrink-0 text-[#E8B923]" />
+              <Calendar className="mt-0.5 h-5 w-5 shrink-0 text-[#E8B923]" />
               <div>
                 <h5 className="text-sm font-bold text-[#E8B923]">Timeline Limit</h5>
                 <p className="text-xs text-slate-300">
@@ -175,7 +175,7 @@ export default function RegisterForm() {
               </div>
             </div>
             <div className="flex items-start gap-3 rounded-2xl border border-white/10 bg-white/5 p-4">
-              <Wallet className="mt-0.5 h-5 w-5 flex-shrink-0 text-[#E8B923]" />
+              <Wallet className="mt-0.5 h-5 w-5 shrink-0 text-[#E8B923]" />
               <div>
                 <h5 className="text-sm font-bold text-[#E8B923]">Instalment Flexibility</h5>
                 <p className="text-xs text-slate-300">Split your payment into 10 parts (₦850 each). Must be completed by Nov 30.</p>
