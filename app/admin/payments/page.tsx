@@ -28,6 +28,7 @@ export default function AdminPaymentsPage() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
 
   async function load() {
     setLoading(true);
@@ -52,18 +53,23 @@ export default function AdminPaymentsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statusFilter]);
 
-  async function reVerify(transactionId: string) {
-    setBusyId(transactionId);
+  async function approve(p: Payment) {
+    const ok = window.confirm(
+      `Approve ₦${p.amount.toLocaleString()} for ${p.participant.otherName} ${p.participant.surname} (${p.participant.registrationId})?\n\nOnly approve after you have seen the money in the bank account.`
+    );
+    if (!ok) return;
+    setBusyId(p.transactionId);
     setMessage(null);
+    setError(null);
     try {
-      const res = await fetch('/api/payments/verify-stuck', {
+      const res = await fetch('/api/payments/approve', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ transactionId }),
+        body: JSON.stringify({ transactionId: p.transactionId }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
-      setMessage(`Transaction is now ${data.status}.`);
+      setMessage(`Approved. ${p.participant.registrationId} is now ${data.participantPaymentStatus.replace('_', ' ').toLowerCase()}.`);
       load();
     } catch (e: any) {
       setError(e.message);
@@ -93,6 +99,16 @@ export default function AdminPaymentsPage() {
       setBusyId(null);
     }
   }
+
+  const q = search.trim().toLowerCase();
+  const visible = q
+    ? payments.filter((p) =>
+        [p.participant.registrationId, p.participant.surname, p.participant.otherName, p.transactionId]
+          .join(' ')
+          .toLowerCase()
+          .includes(q)
+      )
+    : payments;
 
   return (
     <main className="min-h-screen bg-[#F7F3E8] px-6 py-10">
@@ -125,12 +141,19 @@ export default function AdminPaymentsPage() {
           ))}
         </div>
 
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search by Delegate ID, name or reference…"
+          className="mt-4 w-full rounded-xl border border-[#0F3D2E]/15 bg-white px-4 py-2.5 text-sm outline-none focus:border-[#0F3D2E]"
+        />
+
         <div className="mt-4 overflow-x-auto rounded-2xl border border-[#0F3D2E]/10 bg-white">
           {loading ? (
             <div className="flex justify-center p-10">
               <div className="h-8 w-8 animate-spin rounded-full border-4 border-[#0F3D2E]/15 border-t-[#0F3D2E]" />
             </div>
-          ) : payments.length === 0 ? (
+          ) : visible.length === 0 ? (
             <p className="p-6 text-sm text-[#4B5347]">No transactions match this filter.</p>
           ) : (
             <table className="w-full min-w-[800px] text-left text-sm">
@@ -146,7 +169,7 @@ export default function AdminPaymentsPage() {
                 </tr>
               </thead>
               <tbody>
-                {payments.map((p) => (
+                {visible.map((p) => (
                   <tr key={p.id} className="border-b border-[#0F3D2E]/5 last:border-0">
                     <td className="px-4 py-3 font-mono text-xs">{p.transactionId}</td>
                     <td className="px-4 py-3">
@@ -163,8 +186,8 @@ export default function AdminPaymentsPage() {
                     <td className="px-4 py-3 text-xs text-[#4B5347]">{p.paidAt ? new Date(p.paidAt).toLocaleDateString() : '—'}</td>
                     <td className="px-4 py-3">
                       {p.status === 'PENDING' && (
-                        <button onClick={() => reVerify(p.transactionId)} disabled={busyId === p.transactionId} className="text-xs font-bold text-[#0F3D2E] underline disabled:opacity-50">
-                          Re-verify
+                        <button onClick={() => approve(p)} disabled={busyId === p.transactionId} className="rounded-full bg-[#0F3D2E] px-3 py-1.5 text-xs font-bold text-[#F7F3E8] disabled:opacity-50">
+                          Approve
                         </button>
                       )}
                       {p.status === 'VERIFIED' && (

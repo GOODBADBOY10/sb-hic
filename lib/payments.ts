@@ -64,11 +64,36 @@ export interface PaymentAccount {
 }
 
 /**
- * Gives the payer an account to transfer to for ONE payment.
- *
- * PAYMENT_MODE=mock  → fake account, for local testing only (refused in production).
- * anything else      → TODO: call the provider's "create account" endpoint here
- *                      once they share the API docs.
+ * PAYMENT_MODE decides how payers are told where to send money:
+ *   manual (default) → everyone pays ONE fixed account and sends the receipt on
+ *                      WhatsApp; an admin approves the payment by hand.
+ *   mock             → fake per-payment account, for local testing only.
+ *   provider         → per-payment accounts from the payment provider (TODO).
+ */
+export function getPaymentMode(): 'manual' | 'mock' | 'provider' {
+  const m = process.env.PAYMENT_MODE;
+  return m === 'mock' || m === 'provider' ? m : 'manual';
+}
+
+export function getManualAccount(): PaymentAccount {
+  return {
+    bankName: process.env.PAYMENT_BANK_NAME || 'GT Bank',
+    accountName: process.env.PAYMENT_ACCOUNT_NAME || 'Tajudeen Idris Ademola',
+    accountNumber: process.env.PAYMENT_ACCOUNT_NUMBER || '0561035922',
+  };
+}
+
+/** Digits-only international number for wa.me links (Nigerian numbers get 234). */
+export function getWhatsappNumber(): string {
+  const raw = (process.env.PAYMENT_WHATSAPP || '9048411029').replace(/\D/g, '');
+  if (raw.startsWith('234')) return raw;
+  if (raw.startsWith('0')) return '234' + raw.slice(1);
+  return raw.length === 10 ? '234' + raw : raw;
+}
+
+/**
+ * Per-payment account for the non-manual modes.
+ * TODO(provider): call the provider's "create account" endpoint here.
  */
 export async function createPaymentAccount(params: {
   reference: string;
@@ -76,7 +101,7 @@ export async function createPaymentAccount(params: {
   name: string;
   email: string;
 }): Promise<PaymentAccount> {
-  if (process.env.PAYMENT_MODE === 'mock') {
+  if (getPaymentMode() === 'mock') {
     if (process.env.NODE_ENV === 'production') {
       throw new Error('PAYMENT_MODE=mock is not allowed in production.');
     }

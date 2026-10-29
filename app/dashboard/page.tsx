@@ -80,7 +80,15 @@ function DashboardContent() {
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || 'Could not start payment.');
-      setTransfer({ transactionId: json.transactionId, amount: json.amount, account: json.account });
+      setTransfer({
+        transactionId: json.transactionId,
+        amount: json.amount,
+        account: json.account,
+        whatsapp: json.whatsapp,
+        registrationId: json.registrationId,
+        name: json.name,
+        label: json.label,
+      });
     } catch (e: any) {
       setError(e.message);
     } finally {

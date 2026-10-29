@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
 import { prisma } from '@/lib/prisma';
-import { computeFee, createPaymentAccount } from '@/lib/payments';
+import { computeFee, createPaymentAccount, getManualAccount, getPaymentMode, getWhatsappNumber } from '@/lib/payments';
 
 export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => null);
@@ -26,10 +26,8 @@ export async function POST(request: NextRequest) {
 
   const slotNumber = paymentType === 'INSTALLMENT' ? Number(installmentNumber) : null;
 
-  // const existing = await prisma.payment.findUnique({
-  //   where: { participantId_installmentNumber: { participantId, installmentNumber: slotNumber } },
-  // });
-
+  // findFirst (not findUnique): a full payment has no instalment number, and
+  // Prisma rejects null inside a compound unique key.
   const existing = await prisma.payment.findFirst({
     where: { participantId, installmentNumber: slotNumber },
   });
@@ -39,48 +37,64 @@ export async function POST(request: NextRequest) {
   }
 
   const reference = existing?.transactionId ?? `SBHIC-${crypto.randomBytes(8).toString('hex').toUpperCase()}`;
+  const mode = getPaymentMode();
 
-  // Reuse the account already issued for this payment slot, so a refresh
-  // or a second click never hands the person a different account.
-  let account = existing?.virtualAccountNumber
-    ? { accountNumber: existing.virtualAccountNumber, bankName: process.env.PAYMENT_BANK_NAME || 'Bank', accountName: process.env.PAYMENT_ACCOUNT_NAME || 'SB HIC' }
-    : null;
-  if (!account) {
-    try {
-      account = await createPaymentAccount({
-        reference,
-        amount: fee.amount,
-        name: `${participant.otherName} ${participant.surname}`,
-        email: participant.email,
-      });
-    } catch (e: any) {
-      return NextResponse.json({ error: e.message }, { status: 502 });
+  // Manual mode: one shared account, so we do NOT store it on the payment
+  // (the webhook matches on stored account numbers and must never match this one).
+  let account;
+  let storedAccountNumber: string | null = null;
+  if (mode === 'manual') {
+    account = getManualAccount();
+  } else {
+    if (existing?.virtualAccountNumber) {
+      account = {
+        accountNumber: existing.virtualAccountNumber,
+        bankName: process.env.PAYMENT_BANK_NAME || 'Bank',
+        accountName: process.env.PAYMENT_ACCOUNT_NAME || 'SB HIC',
+      };
+    } else {
+      try {
+        account = await createPaymentAccount({
+          reference,
+          amount: fee.amount,
+          name: `${participant.otherName} ${participant.surname}`,
+          email: participant.email,
+        });
+      } catch (e: any) {
+        return NextResponse.json({ error: e.message }, { status: 502 });
+      }
     }
+    storedAccountNumber = account.accountNumber;
   }
 
   const payment = existing
     ? await prisma.payment.update({
-      where: { id: existing.id },
-      data: { amount: fee.amount, planRate: fee.planRate, status: 'PENDING', virtualAccountNumber: account.accountNumber },
-    })
+        where: { id: existing.id },
+        data: { amount: fee.amount, planRate: fee.planRate, status: 'PENDING', virtualAccountNumber: storedAccountNumber },
+      })
     : await prisma.payment.create({
-      data: {
-        participantId,
-        transactionId: reference,
-        amount: fee.amount,
-        paymentType,
-        installmentNumber: slotNumber,
-        planRate: fee.planRate,
-        provider: 'bank_transfer',
-        status: 'PENDING',
-        virtualAccountNumber: account.accountNumber,
-      },
-    });
+        data: {
+          participantId,
+          transactionId: reference,
+          amount: fee.amount,
+          paymentType,
+          installmentNumber: slotNumber,
+          planRate: fee.planRate,
+          provider: mode === 'manual' ? 'manual_transfer' : 'bank_transfer',
+          status: 'PENDING',
+          virtualAccountNumber: storedAccountNumber,
+        },
+      });
 
   return NextResponse.json({
     success: true,
     transactionId: payment.transactionId,
     amount: fee.amount,
     account,
+    manual: mode === 'manual',
+    whatsapp: mode === 'manual' ? getWhatsappNumber() : null,
+    registrationId: participant.registrationId,
+    name: `${participant.otherName} ${participant.surname}`,
+    label: paymentType === 'INSTALLMENT' ? `Instalment ${slotNumber}/10` : 'Full payment',
   });
 }

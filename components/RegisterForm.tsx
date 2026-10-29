@@ -125,7 +125,15 @@ export default function RegisterForm() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Could not start payment.');
-      setTransfer({ transactionId: data.transactionId, amount: data.amount, account: data.account });
+      setTransfer({
+        transactionId: data.transactionId,
+        amount: data.amount,
+        account: data.account,
+        whatsapp: data.whatsapp,
+        registrationId: data.registrationId,
+        name: data.name,
+        label: data.label,
+      });
       setIsLoading(false);
     } catch (err: any) {
       setError(err.message);
@@ -373,7 +381,7 @@ export default function RegisterForm() {
                   disabled={isLoading}
                   className="mt-2 w-full max-w-sm rounded-full bg-[#E8B923] px-6 py-3.5 text-sm font-black text-[#0A2A20] shadow-lg disabled:opacity-50"
                 >
-                  {isLoading ? 'Getting account details…' : `Pay by Bank Transfer — ₦${formData.paymentType === 'full' ? '8,500' : '850'}`}
+                  {isLoading ? 'Getting account details…' : 'Get Payment Details'}
                 </button>
               )}
               <button onClick={startAnother} className="rounded-full bg-[#0F3D2E] px-6 py-2.5 text-xs font-bold text-[#E8B923] hover:bg-[#0c2f1d]">
