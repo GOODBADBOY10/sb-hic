@@ -14,8 +14,7 @@ export interface TransferDetails {
   label?: string;
 }
 
-const POLL_MS = 15000;
-const POLL_MAX = 120; // stop checking after about 30 minutes
+const POLL_MAX = 240; // stop checking after about 20-60 minutes, depending on mode
 
 export default function TransferInstructions({ details, onPaid }: { details: TransferDetails; onPaid?: () => void }) {
   const [paid, setPaid] = useState(false);
@@ -40,7 +39,7 @@ export default function TransferInstructions({ details, onPaid }: { details: Tra
       } catch {
         /* keep polling */
       }
-    }, POLL_MS);
+    }, details.whatsapp ? 15000 : 5000);
     return () => {
       stopped = true;
       clearInterval(id);
@@ -51,7 +50,7 @@ export default function TransferInstructions({ details, onPaid }: { details: Tra
     return (
       <div className="flex w-full max-w-sm flex-col items-center gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 p-5 text-center">
         <CheckCircle className="h-8 w-8 text-emerald-600" />
-        <p className="text-sm font-bold text-[#0F3D2E]">Payment confirmed. Thank you!</p>
+        <p className="text-sm font-bold text-[#0F3D2E]">Payment received. Thank you!</p>
         <p className="text-xs text-slate-600">Your registration is updated and your hostel will be assigned shortly.</p>
       </div>
     );

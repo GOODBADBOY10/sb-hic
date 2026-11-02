@@ -8,18 +8,27 @@ type Tx = Prisma.TransactionClient;
 /**
  * Finds which pending Payment a bank credit belongs to. Tried in order:
  *   1. the account number it landed in (each payment gets its own account)
- *   2. customerIdentifier / externalRef equal to our payment reference
- *   3. our reference (SBHIC-XXXXXXXXXXXXXXXX) appearing in the narration
+ *   2. customerIdentifier / externalRef equal to our payment reference (the provider's checkout reference)
+ *   3. our own reference (SBHIC-XXXXXXXXXXXXXXXX) appearing in the narration
  * If the provider's design differs, this is the ONLY function to change.
  */
-async function findPayment(tx: Tx, p: { accountNumber?: string | null; customerIdentifier?: string | null; externalRef?: string | null; narration?: string | null }) {
+async function findPayment(
+  tx: Tx,
+  p: { accountNumber?: string | null; customerIdentifier?: string | null; externalRef?: string | null; narration?: string | null },
+  amountNaira: number
+) {
   const keys = [p.accountNumber, p.customerIdentifier, p.externalRef].filter(Boolean) as string[];
   for (const key of keys) {
-    const hit = await tx.payment.findFirst({
-      where: { OR: [{ virtualAccountNumber: key }, { transactionId: key }] },
-      orderBy: { status: 'asc' },
+    // Prefer a still-pending payment on that account (an exact amount match wins);
+    // fall back to any payment so a repeat transfer is logged instead of ignored.
+    const pending = await tx.payment.findMany({
+      where: { status: 'PENDING', OR: [{ virtualAccountNumber: key }, { transactionId: key }] },
     });
-    if (hit) return hit;
+    if (pending.length > 0) return pending.find((x) => x.amount === amountNaira) ?? pending[0];
+    const any = await tx.payment.findFirst({
+      where: { OR: [{ virtualAccountNumber: key }, { transactionId: key }] },
+    });
+    if (any) return any;
   }
   const m = p.narration?.match(/SBHIC-[A-F0-9]{16}/i);
   if (m) return tx.payment.findUnique({ where: { transactionId: m[0].toUpperCase() } });
@@ -41,7 +50,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const outcome = await prisma.$transaction(async (tx) => {
-      const payment = await findPayment(tx, payload);
+      const payment = await findPayment(tx, payload, payload.amountNaira);
       const record = (outcome: string) =>
         tx.paymentEvent.create({
           data: {

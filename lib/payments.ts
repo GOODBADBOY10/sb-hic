@@ -65,52 +65,107 @@ export interface PaymentAccount {
 
 /**
  * PAYMENT_MODE decides how payers are told where to send money:
- *   manual (default) → everyone pays ONE fixed account and sends the receipt on
- *                      WhatsApp; an admin approves the payment by hand.
- *   mock             → fake per-payment account, for local testing only.
- *   provider         → per-payment accounts from the payment provider (TODO).
+ *   provider (default) → a checkout is created with the payment provider and the
+ *                        payer gets a dedicated account number for that payment.
+ *   manual             → emergency fallback: one fixed account from env vars and
+ *                        receipts sent on WhatsApp; admins approve by hand.
+ *   mock               → fake account for local testing only (refused in production).
  */
 export function getPaymentMode(): 'manual' | 'mock' | 'provider' {
   const m = process.env.PAYMENT_MODE;
-  return m === 'mock' || m === 'provider' ? m : 'manual';
+  return m === 'mock' || m === 'manual' ? m : 'provider';
 }
 
+export const PROVIDER_NAME = 'ethica_checkout';
+
+function bankName() {
+  return process.env.PAYMENT_BANK_NAME || 'Ethica MFB';
+}
+
+/** Manual mode only. No account details live in the code: set them in env vars. */
 export function getManualAccount(): PaymentAccount {
-  return {
-    bankName: process.env.PAYMENT_BANK_NAME || 'GT Bank',
-    accountName: process.env.PAYMENT_ACCOUNT_NAME || 'Tajudeen Idris Ademola',
-    accountNumber: process.env.PAYMENT_ACCOUNT_NUMBER || '0561035922',
-  };
+  const accountNumber = process.env.PAYMENT_ACCOUNT_NUMBER;
+  const accountName = process.env.PAYMENT_ACCOUNT_NAME;
+  if (!accountNumber || !accountName) {
+    throw new Error('Manual payment account is not configured.');
+  }
+  return { bankName: process.env.PAYMENT_BANK_NAME || 'Bank', accountName, accountNumber };
 }
 
 /** Digits-only international number for wa.me links (Nigerian numbers get 234). */
 export function getWhatsappNumber(): string {
-  const raw = (process.env.PAYMENT_WHATSAPP || '9048411029').replace(/\D/g, '');
+  const raw = (process.env.PAYMENT_WHATSAPP || '').replace(/\D/g, '');
+  if (!raw) throw new Error('PAYMENT_WHATSAPP is not configured.');
   if (raw.startsWith('234')) return raw;
   if (raw.startsWith('0')) return '234' + raw.slice(1);
   return raw.length === 10 ? '234' + raw : raw;
 }
 
-/**
- * Per-payment account for the non-manual modes.
- * TODO(provider): call the provider's "create account" endpoint here.
- */
-export async function createPaymentAccount(params: {
-  reference: string;
-  amount: number;
-  name: string;
-  email: string;
-}): Promise<PaymentAccount> {
-  if (getPaymentMode() === 'mock') {
-    if (process.env.NODE_ENV === 'production') {
-      throw new Error('PAYMENT_MODE=mock is not allowed in production.');
-    }
-    const digits = (parseInt(crypto.createHash('sha1').update(params.reference).digest('hex').slice(0, 8), 16) % 1_000_000_000)
-      .toString()
-      .padStart(9, '0');
-    return { accountNumber: `9${digits}`, bankName: 'Test Bank', accountName: 'SB HIC 2026 (TEST)' };
+export function createMockAccount(reference: string): PaymentAccount {
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('PAYMENT_MODE=mock is not allowed in production.');
   }
-  throw new Error('The payment provider is not configured yet.');
+  const digits = (parseInt(crypto.createHash('sha1').update(reference).digest('hex').slice(0, 8), 16) % 1_000_000_000)
+    .toString()
+    .padStart(9, '0');
+  return { accountNumber: `9${digits}`, bankName: 'Test Bank', accountName: 'SB HIC 2026 (TEST)' };
+}
+
+// ── Payment provider: Dynamic Checkout API ──────────────────────────────
+
+function providerBase() {
+  return (process.env.PAYMENT_API_BASE || 'https://bassapi.ethicamfb.org').replace(/\/$/, '');
+}
+
+function providerAuthHeader() {
+  const id = process.env.PAYMENT_MERCHANT_ID;
+  const key = process.env.PAYMENT_SECRET_KEY;
+  if (!id || !key) throw new Error('Payment provider credentials are not configured.');
+  return 'Basic ' + Buffer.from(`${id}:${key}`).toString('base64');
+}
+
+async function providerCall(path: string, init: { body?: object }): Promise<any> {
+  const res = await fetch(`${providerBase()}${path}`, {
+    method: 'POST',
+    headers: {
+      Accept: '*/*',
+      Authorization: providerAuthHeader(),
+      ...(init.body ? { 'Content-Type': 'application/json' } : {}),
+    },
+    body: init.body ? JSON.stringify(init.body) : undefined,
+    signal: AbortSignal.timeout(20_000),
+    cache: 'no-store',
+  });
+  const json = await res.json().catch(() => null);
+  // statusCode in the BODY is what counts, not only the HTTP status.
+  if (!json || json.statusCode !== 200) {
+    console.error('payment provider error', path, res.status, json?.message || json?.description);
+    throw new Error('Could not reach the payment service. Please try again in a moment.');
+  }
+  return json.data;
+}
+
+/** Fetches the account a checkout is paid into. */
+export async function getProviderCheckout(reference: string): Promise<PaymentAccount> {
+  const data = await providerCall(`/checkout/${encodeURIComponent(reference)}`, {});
+  if (!data?.accountNumber) throw new Error('Could not reach the payment service. Please try again in a moment.');
+  return {
+    accountNumber: String(data.accountNumber),
+    accountName: String(data.accountName || 'ETHICA'),
+    bankName: bankName(),
+  };
+}
+
+/** Creates a checkout for one payment and returns its reference and account. */
+export async function createProviderCheckout(params: {
+  amount: number;
+  email: string;
+}): Promise<{ reference: string; account: PaymentAccount }> {
+  const data = await providerCall('/api/dynamic-checkout', { body: { amount: params.amount, email: params.email } });
+  if (!data?.reference) throw new Error('Could not reach the payment service. Please try again in a moment.');
+  const reference = String(data.reference);
+  const account = await getProviderCheckout(reference);
+  return { reference, account };
 }
 
 /** Shape of the provider's credit-notification webhook. */
@@ -148,31 +203,46 @@ function safeEqual(a: string, b: string) {
  * Configure ONE of these once the provider tells you how they authenticate:
  *   PAYMENT_WEBHOOK_AUTH_MODE=header (default): header PAYMENT_WEBHOOK_HEADER must equal PAYMENT_WEBHOOK_SECRET
  *   PAYMENT_WEBHOOK_AUTH_MODE=hmac: header holds HMAC(PAYMENT_WEBHOOK_HMAC_ALGO, secret, rawBody) as hex
- * With no secret set, production fails CLOSED unless you explicitly opt out.
+ * You can also (or instead) restrict callers with PAYMENT_WEBHOOK_ALLOWED_IPS=ip1,ip2.
+ * With neither set, production fails CLOSED unless you explicitly opt out.
  */
 export function authorizeWebhook(
   request: NextRequest,
   rawBody: string
 ): { ok: true } | { ok: false; status: number; reason: string } {
   const secret = process.env.PAYMENT_WEBHOOK_SECRET;
-  if (!secret) {
+  const allowedIps = (process.env.PAYMENT_WEBHOOK_ALLOWED_IPS || '')
+    .split(',')
+    .map((x) => x.trim())
+    .filter(Boolean);
+
+  if (!secret && allowedIps.length === 0) {
     if (process.env.NODE_ENV === 'production' && process.env.PAYMENT_WEBHOOK_ALLOW_UNAUTHENTICATED !== 'true') {
       return { ok: false, status: 500, reason: 'Webhook authentication is not configured.' };
     }
     return { ok: true };
   }
 
-  const headerName = process.env.PAYMENT_WEBHOOK_HEADER || 'x-webhook-secret';
-  const provided = request.headers.get(headerName);
-  if (!provided) return { ok: false, status: 401, reason: 'Missing authentication header.' };
+  // IP allowlist (Vercel sets x-forwarded-for itself, so the first entry is the real caller).
+  if (allowedIps.length > 0) {
+    const ip = (request.headers.get('x-forwarded-for')?.split(',')[0] || request.headers.get('x-real-ip') || '').trim();
+    if (!allowedIps.includes(ip)) return { ok: false, status: 403, reason: 'Caller not allowed.' };
+  }
 
-  const mode = process.env.PAYMENT_WEBHOOK_AUTH_MODE || 'header';
-  const expected =
-    mode === 'hmac'
-      ? crypto.createHmac(process.env.PAYMENT_WEBHOOK_HMAC_ALGO || 'sha256', secret).update(rawBody).digest('hex')
-      : secret;
+  if (secret) {
+    const headerName = process.env.PAYMENT_WEBHOOK_HEADER || 'x-webhook-secret';
+    const provided = request.headers.get(headerName);
+    if (!provided) return { ok: false, status: 401, reason: 'Missing authentication header.' };
 
-  return safeEqual(provided, expected) ? { ok: true } : { ok: false, status: 401, reason: 'Invalid signature.' };
+    const mode = process.env.PAYMENT_WEBHOOK_AUTH_MODE || 'header';
+    const expected =
+      mode === 'hmac'
+        ? crypto.createHmac(process.env.PAYMENT_WEBHOOK_HMAC_ALGO || 'sha256', secret).update(rawBody).digest('hex')
+        : secret;
+    if (!safeEqual(provided, expected)) return { ok: false, status: 401, reason: 'Invalid signature.' };
+  }
+
+  return { ok: true };
 }
 
 // ── Paystack (no longer used by the main flow; kept because verify-stuck still imports it) ──
