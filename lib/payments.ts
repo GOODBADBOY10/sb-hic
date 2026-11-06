@@ -145,9 +145,43 @@ async function providerCall(path: string, init: { body?: object }): Promise<any>
   return json.data;
 }
 
+/**
+ * When PAYMENT_RELAY_URL is set, provider calls go through the relay server
+ * (which has the fixed IP the provider whitelists and holds the provider keys).
+ */
+async function relayCall(path: string, body: object): Promise<any> {
+  const base = process.env.PAYMENT_RELAY_URL;
+  const secret = process.env.PAYMENT_RELAY_SECRET;
+  if (!base || !secret) throw new Error('Payment relay is not configured.');
+
+  const raw = JSON.stringify(body);
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const signature = crypto.createHmac('sha256', secret).update(`${timestamp}.${raw}`).digest('hex');
+
+  const res = await fetch(`${base.replace(/\/$/, '')}${path}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-relay-timestamp': timestamp,
+      'x-relay-signature': signature,
+    },
+    body: raw,
+    signal: AbortSignal.timeout(25_000),
+    cache: 'no-store',
+  });
+  const json = await res.json().catch(() => null);
+  if (!res.ok || !json?.ok) {
+    console.error('payment relay error', path, res.status, json?.error);
+    throw new Error('Could not reach the payment service. Please try again in a moment.');
+  }
+  return json.data;
+}
+
 /** Fetches the account a checkout is paid into. */
 export async function getProviderCheckout(reference: string): Promise<PaymentAccount> {
-  const data = await providerCall(`/checkout/${encodeURIComponent(reference)}`, {});
+  const data = process.env.PAYMENT_RELAY_URL
+    ? await relayCall('/checkout/details', { reference })
+    : await providerCall(`/checkout/${encodeURIComponent(reference)}`, {});
   if (!data?.accountNumber) throw new Error('Could not reach the payment service. Please try again in a moment.');
   return {
     accountNumber: String(data.accountNumber),
@@ -161,6 +195,20 @@ export async function createProviderCheckout(params: {
   amount: number;
   email: string;
 }): Promise<{ reference: string; account: PaymentAccount }> {
+  if (process.env.PAYMENT_RELAY_URL) {
+    const data = await relayCall('/checkout', { amount: params.amount, email: params.email });
+    if (!data?.reference || !data?.accountNumber) {
+      throw new Error('Could not reach the payment service. Please try again in a moment.');
+    }
+    return {
+      reference: String(data.reference),
+      account: {
+        accountNumber: String(data.accountNumber),
+        accountName: String(data.accountName || 'ETHICA'),
+        bankName: bankName(),
+      },
+    };
+  }
   const data = await providerCall('/api/dynamic-checkout', { body: { amount: params.amount, email: params.email } });
   if (!data?.reference) throw new Error('Could not reach the payment service. Please try again in a moment.');
   const reference = String(data.reference);

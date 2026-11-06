@@ -1,0 +1,20 @@
+[Unit]
+Description=SB HIC payment relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=relay
+Group=relay
+WorkingDirectory=/opt/relay
+EnvironmentFile=/etc/relay.env
+ExecStart=/usr/bin/node /opt/relay/server.mjs
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
